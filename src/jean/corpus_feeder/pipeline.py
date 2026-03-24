@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import structlog
 
-from jean.corpus_feeder.adapter import FeedRequest, KFabricAdapter, MockKFabricAdapter
+from jean.corpus_feeder.adapter import FeedRequest, KFabricAdapter, make_adapter
 from jean.models import FieldObservation, ProcedureState
 
 log = structlog.get_logger()
@@ -29,7 +29,7 @@ class CorpusPipeline:
     """
 
     def __init__(self, adapter: KFabricAdapter | None = None) -> None:
-        self.adapter: KFabricAdapter = adapter or MockKFabricAdapter()
+        self.adapter: KFabricAdapter = adapter or make_adapter()
 
     async def run(self, observation: FieldObservation) -> str:
         """Submit observation to KFabric.

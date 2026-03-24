@@ -41,9 +41,35 @@ services:
     environment:
       - JEAN_LOG_LEVEL=info
       - JEAN_FLOWFABRIC_WEBHOOK=${JEAN_FLOWFABRIC_WEBHOOK:-}
+      - JEAN_KFABRIC_URL=${JEAN_KFABRIC_URL:-}
     depends_on:
       aggregator:
         condition: service_healthy
+
+  # KFabric mock — lightweight stub returning fake entry IDs
+  # Replace with real KFabric service when available
+  kfabric-mock:
+    image: python:3.11-slim
+    command: >
+      python3 -c "
+      import json, http.server, uuid
+      class H(http.server.BaseHTTPRequestHandler):
+          def log_message(self, *a): pass
+          def do_GET(self):
+              self.send_response(200)
+              self.end_headers()
+              self.wfile.write(b'{\"status\":\"ok\"}')
+          def do_POST(self):
+              n = int(self.headers.get('Content-Length',0))
+              self.rfile.read(n)
+              self.send_response(201)
+              self.send_header('Content-Type','application/json')
+              self.end_headers()
+              self.wfile.write(json.dumps({'entry_id':'kf-'+str(uuid.uuid4())[:8]}).encode())
+      http.server.HTTPServer(('0.0.0.0',8300),H).serve_forever()
+      "
+    ports:
+      - "8300:8300"
 
   # jean-agent runs on each workstation — not in compose for production
   # This service is for local development/testing only

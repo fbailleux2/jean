@@ -122,9 +122,16 @@ See `.env.example` for a full list. Key variables:
 | jean-validator | 🔜 FlowFabric integration (next milestone) |
 | macOS NSWorkspace capture | 🔜 requires pyobjc (next milestone) |
 | GitHub Actions CI | ✅ `.github/workflows/ci.yml` |
-| Tests | ✅ 62 passing (models, buffer, anonymizer, detector, store, ERP, validator, pipeline, bridge) |
+| Prometheus metrics | ✅ `GET /metrics` on aggregator (8100) and validator (8200) |
+| KFabric HTTP adapter | ✅ `HttpKFabricAdapter` — real HTTP client, `MockKFabricAdapter` default |
+| Validator UI | ✅ `GET /ui/` — approve/reject interface, no build step |
+| Tests | ✅ 74 passing (models, buffer, anonymizer, detector, store, ERP, validator, pipeline, bridge, adapter, metrics) |
 
 ---
+
+## macOS Capture Setup
+
+See [docs/macos-capture.md](docs/macos-capture.md) — covers Accessibility permissions, pyobjc install, and how to verify live capture.
 
 ## Design Decisions
 

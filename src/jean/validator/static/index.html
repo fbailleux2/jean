@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Jean Validator</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #f5f5f5; color: #111; }
+    header {
+      background: #1a1a2e; color: #fff; padding: 1rem 2rem;
+      display: flex; align-items: center; gap: 1rem;
+    }
+    header h1 { font-size: 1.2rem; font-weight: 600; }
+    header .subtitle { font-size: 0.85rem; opacity: 0.7; }
+    .container { max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }
+    .filter-bar { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; }
+    .filter-bar button {
+      padding: 0.4rem 1rem; border: 1px solid #ccc; background: #fff;
+      border-radius: 4px; cursor: pointer; font-size: 0.875rem;
+    }
+    .filter-bar button.active { background: #1a1a2e; color: #fff; border-color: #1a1a2e; }
+    table { width: 100%; border-collapse: collapse; background: #fff;
+            border-radius: 8px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,.1); }
+    th { background: #f0f0f0; text-align: left; padding: 0.75rem 1rem;
+         font-size: 0.8rem; text-transform: uppercase; letter-spacing: .05em; color: #555; }
+    td { padding: 0.75rem 1rem; border-top: 1px solid #eee; font-size: 0.875rem; vertical-align: top; }
+    tr:hover td { background: #fafafa; }
+    .badge {
+      display: inline-block; padding: 0.2rem 0.5rem; border-radius: 12px;
+      font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
+    }
+    .badge.observed   { background: #fff3cd; color: #856404; }
+    .badge.validated  { background: #d1e7dd; color: #0f5132; }
+    .badge.recommended { background: #cfe2ff; color: #084298; }
+    .gap-bar { height: 6px; background: #eee; border-radius: 3px; margin-top: 4px; }
+    .gap-fill { height: 100%; border-radius: 3px; background: #dc3545; }
+    .btn { padding: 0.35rem 0.75rem; border: none; border-radius: 4px;
+           cursor: pointer; font-size: 0.8rem; font-weight: 500; }
+    .btn-approve { background: #198754; color: #fff; }
+    .btn-reject  { background: #dc3545; color: #fff; margin-left: 0.4rem; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .corpus-id { font-size: 0.75rem; color: #666; margin-top: 2px; }
+    .empty { text-align: center; padding: 3rem; color: #888; }
+    .toast {
+      position: fixed; bottom: 1.5rem; right: 1.5rem;
+      background: #1a1a2e; color: #fff; padding: 0.75rem 1.25rem;
+      border-radius: 6px; font-size: 0.875rem; opacity: 0;
+      transition: opacity .3s; pointer-events: none;
+    }
+    .toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Jean Validator</h1>
+    <div class="subtitle">Human validation circuit — Fabric cognitive OS</div>
+  </div>
+</header>
+
+<div class="container">
+  <div class="filter-bar">
+    <button class="active" data-filter="">All</button>
+    <button data-filter="observed">Observed</button>
+    <button data-filter="validated">Validated</button>
+  </div>
+
+  <div id="obs-table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Process context</th>
+          <th>Declared procedure</th>
+          <th>Observed behavior</th>
+          <th>Gap</th>
+          <th>State</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="obs-tbody">
+        <tr><td colspan="6" class="empty">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = '';
+let currentFilter = '';
+
+function showToast(msg, error = false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.background = error ? '#dc3545' : '#198754';
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+async function loadObservations() {
+  const url = currentFilter ? `${API}/observations?state=${currentFilter}` : `${API}/observations`;
+  const resp = await fetch(url);
+  const data = await resp.json();
+  renderTable(data);
+}
+
+function renderTable(obs) {
+  const tbody = document.getElementById('obs-tbody');
+  if (!obs.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">No observations found.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = obs.map(o => {
+    const gapPct = Math.round(o.gap_score * 100);
+    const corpusId = o.metadata?.corpus_entry_id
+      ? `<div class="corpus-id">KFabric: ${o.metadata.corpus_entry_id}</div>` : '';
+    const isValidated = o.state === 'validated';
+    return `<tr data-id="${o.id}">
+      <td>${o.process_context}</td>
+      <td style="max-width:200px">${o.declared_procedure}</td>
+      <td style="max-width:200px">${o.observed_behavior}</td>
+      <td>
+        <span>${gapPct}%</span>
+        <div class="gap-bar"><div class="gap-fill" style="width:${gapPct}%"></div></div>
+      </td>
+      <td><span class="badge ${o.state}">${o.state}</span></td>
+      <td>
+        <button class="btn btn-approve" onclick="approve('${o.id}')" ${isValidated ? 'disabled' : ''}>Approve</button>
+        <button class="btn btn-reject"  onclick="reject('${o.id}')"  ${isValidated ? 'disabled' : ''}>Reject</button>
+        ${corpusId}
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+async function approve(id) {
+  const validatorId = prompt('Your identifier (email or name):');
+  if (!validatorId?.trim()) return;
+  try {
+    const resp = await fetch(`${API}/observations/${id}/approve`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({validator_id: validatorId.trim()})
+    });
+    if (!resp.ok) { const e = await resp.json(); showToast(e.detail || 'Error', true); return; }
+    showToast('Observation approved ✓');
+    loadObservations();
+  } catch(e) { showToast('Network error', true); }
+}
+
+async function reject(id) {
+  const reason = prompt('Rejection reason:');
+  if (!reason?.trim()) return;
+  try {
+    const resp = await fetch(`${API}/observations/${id}/reject`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({rejection_reason: reason.trim()})
+    });
+    if (!resp.ok) { const e = await resp.json(); showToast(e.detail || 'Error', true); return; }
+    showToast('Observation rejected');
+    loadObservations();
+  } catch(e) { showToast('Network error', true); }
+}
+
+// Filter buttons
+document.querySelectorAll('.filter-bar button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.filter-bar button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentFilter = btn.dataset.filter;
+    loadObservations();
+  });
+});
+
+loadObservations();
+setInterval(loadObservations, 15000); // auto-refresh every 15s
+</script>
+</body>
+</html>

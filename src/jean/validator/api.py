@@ -25,6 +25,9 @@ from datetime import datetime, timezone
 
 import structlog
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, Field, field_validator
 
 from jean.bridges.flowfabric import FlowFabricBridge
@@ -33,6 +36,7 @@ from jean.models import FieldObservation, ProcedureState
 
 log = structlog.get_logger()
 app = FastAPI(title="jean-validator", version="0.2.0")
+Instrumentator().instrument(app).expose(app)
 
 # In-memory store for MVP
 _observations: dict[str, FieldObservation] = {}
@@ -190,3 +194,21 @@ def set_bridge(bridge: FlowFabricBridge) -> None:
     """Replace the FlowFabricBridge singleton (for testing)."""
     global _bridge
     _bridge = bridge
+
+
+# ---------------------------------------------------------------------------
+# UI — served at /ui (no build step, plain HTML+JS)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/", include_in_schema=False)
+async def root_redirect() -> RedirectResponse:
+    return RedirectResponse(url="/ui/")
+
+
+# Static files mounted last so they don't shadow API routes
+import pathlib as _pathlib
+
+_static_dir = _pathlib.Path(__file__).parent / "static"
+_static_dir.mkdir(exist_ok=True)
+app.mount("/ui", StaticFiles(directory=str(_static_dir), html=True), name="ui")

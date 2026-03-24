@@ -16,6 +16,7 @@ from typing import AsyncGenerator
 
 import structlog
 from fastapi import FastAPI
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from jean.aggregator.anonymizer import Anonymizer
 from jean.aggregator.pattern_detector import PatternDetector
@@ -43,6 +44,7 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 app = FastAPI(title="jean-aggregator", version="0.2.0", lifespan=_lifespan)
+Instrumentator().instrument(app).expose(app)
 
 
 # Mount ERP connector
