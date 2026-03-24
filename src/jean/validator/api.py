@@ -37,6 +37,7 @@ from enum import StrEnum
 
 from jean.auth import require_auth
 from jean.bridges.flowfabric import FlowFabricBridge
+from jean.corpus_feeder.adapter import make_adapter
 from jean.corpus_feeder.pipeline import CorpusPipeline
 from jean.models import FieldObservation, ProcedureState
 from jean.validator.store import InMemoryObservationStore, ObservationStore, make_obs_store
@@ -57,6 +58,18 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _store = make_obs_store()
     await _store.open()
     log.info("jean-validator started", store=type(_store).__name__)
+
+    # Optional startup health check — warn but never fail startup
+    _kfabric = make_adapter()
+    kfabric_ok = await _kfabric.health()
+    if kfabric_ok:
+        log.info("KFabric health check passed", adapter=type(_kfabric).__name__)
+    else:
+        log.warning(
+            "KFabric health check failed — corpus submission may not work",
+            adapter=type(_kfabric).__name__,
+        )
+
     yield
     await _store.close()
 

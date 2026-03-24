@@ -23,6 +23,7 @@ import structlog
 
 from jean.agent.buffer import LocalBuffer
 from jean.agent.capture import AnnotationCapture, AppTransitionCapture, StructuralActionCapture
+from jean.agent.capture_keyboard import KeyboardCapture
 from jean.agent.emitter import EventEmitter
 
 structlog.configure(
@@ -44,15 +45,36 @@ async def _capture_loop(
     session_id = str(uuid.uuid4())
     log.info("Starting capture session", session_id=session_id, process_context=process_context)
 
+    # Shared queue for keyboard-hotkey events (KeyboardCapture → buffer)
+    kb_queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
     app_cap = AppTransitionCapture(workstation_id, process_context, session_id)
     struct_cap = StructuralActionCapture(workstation_id, process_context, session_id)
+    kb_cap = KeyboardCapture(
+        event_queue=kb_queue,
+        workstation_id=workstation_id,
+        process_context=process_context,
+        session_id=session_id,
+        loop=loop,
+    )
 
-    async def _drain(cap: AppTransitionCapture | StructuralActionCapture) -> None:
+    async def _drain_gen(cap: AppTransitionCapture | StructuralActionCapture) -> None:
         async for event in cap.events():
             await buffer.push(event)
             log.debug("Captured event", type=event.type, app=event.app)
 
-    await asyncio.gather(_drain(app_cap), _drain(struct_cap))
+    async def _drain_kb() -> None:
+        kb_cap.start()
+        try:
+            while True:
+                event = await kb_queue.get()
+                await buffer.push(event)
+                log.debug("Keyboard event", type=event.type, app=event.app)
+        finally:
+            kb_cap.stop()
+
+    await asyncio.gather(_drain_gen(app_cap), _drain_gen(struct_cap), _drain_kb())
 
 
 async def _emit_loop(buffer: LocalBuffer) -> None:

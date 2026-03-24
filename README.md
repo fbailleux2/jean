@@ -106,39 +106,46 @@ See `.env.example` for a full list. Key variables:
 | `JEAN_OBS_THRESHOLD` | `0.7` | Min confidence to auto-generate FieldObservations |
 | `JEAN_OBS_STORE_PATH` | — | SQLite path for validator persistence (unset = in-memory) |
 | `JEAN_FLOWFABRIC_WEBHOOK` | — | FlowFabric notification URL (optional) |
+| `JEAN_KFABRIC_URL` | — | KFabric ingest URL (unset = MockKFabricAdapter) |
+| `JEAN_KFABRIC_API_KEY` | — | Bearer token for KFabric API auth (unset = no auth) |
 
 ---
 
 ## Project Status
 
-**v0.1.0 — Core engine bootstrapped.**
+**v0.9.0 — Full capture stack + KFabric auth.**
 
 | Component | Status |
 |-----------|--------|
 | Data models (Pydantic v2) | ✅ BusinessEvent, SessionTrace, PatternHypothesis, FieldObservation |
 | jean-agent LocalBuffer (SQLite, offline-first) | ✅ |
 | jean-agent EventEmitter (HTTP flush with backoff) | ✅ |
-| jean-agent AppTransitionCapture (macOS) | ✅ stub (requires pyobjc) |
+| jean-agent AppTransitionCapture — macOS | ✅ NSWorkspace via pyobjc (`uv sync --extra macos`) |
+| jean-agent AppTransitionCapture — Linux | ✅ `_linux.py` — xdotool polling, process name via /proc |
+| jean-agent AppTransitionCapture — Windows | ✅ `_windows.py` — Win32 ctypes polling, no pywin32 needed |
+| jean-agent KeyboardCapture | ✅ pynput-based hotkeys wired into `main.py` (Ctrl+S/P/Shift+E) |
 | jean-aggregator FastAPI (ingest + patterns) | ✅ |
 | jean-aggregator Anonymizer | ✅ configurable PII field list |
 | jean-aggregator PatternDetector | ✅ sliding-window n-gram |
-| jean-corpus-feeder KFabricAdapter | ✅ mock implementation |
-| jean-validator | 🔜 FlowFabric integration (next milestone) |
-| macOS NSWorkspace capture | 🔜 requires pyobjc (next milestone) |
+| jean-corpus-feeder HttpKFabricAdapter | ✅ real HTTP client, retry on 5xx, `JEAN_KFABRIC_API_KEY` Bearer auth |
+| jean-corpus-feeder MockKFabricAdapter | ✅ in-memory default when `JEAN_KFABRIC_URL` unset |
+| KFabric mock service | ✅ `services/kfabric-mock/` — FastAPI with `/ingest`, `/health`, `/entries` |
+| jean-validator REST API | ✅ observe / approve / reject / register routes |
+| jean-validator UI | ✅ `GET /ui/` — approve/reject interface, no build step |
+| jean-validator Persistence | ✅ `SQLiteObservationStore` — `JEAN_OBS_STORE_PATH` env var (in-memory default) |
+| jean-validator startup health check | ✅ KFabric health check logged on startup (warn, never fail) |
+| FlowFabric bridge — bi-directional | ✅ `notify()` sends callback_url; `POST /webhook/flowfabric` handles approve/reject |
+| FlowFabric bridge — retry | ✅ 3 attempts, 1s/2s/4s backoff on 5xx |
 | GitHub Actions CI | ✅ `.github/workflows/ci.yml` |
 | Prometheus metrics | ✅ `GET /metrics` on aggregator (8100) and validator (8200) |
-| KFabric HTTP adapter | ✅ `HttpKFabricAdapter` — real HTTP client, `MockKFabricAdapter` default |
-| Validator UI | ✅ `GET /ui/` — approve/reject interface, no build step |
 | End-to-end integration test | ✅ `tests/test_integration.py` — full pipeline from buffer to approval |
-| macOS thread bridge | ✅ `asyncio.get_running_loop()`, thread simulation tests |
+| macOS thread bridge fix | ✅ `asyncio.get_running_loop()` replaces deprecated `get_event_loop()` |
 | DPIA template | ✅ `docs/dpia-template.md` + `docs/consent-notice-template.md` |
-| API Key Auth | ✅ `X-API-Key` header on all mutating routes — `JEAN_API_KEY` env var |
-| EventEmitter Auth | ✅ `JEAN_API_KEY` forwarded in agent→aggregator HTTP flush |
+| API Key Auth | ✅ `X-API-Key` on all mutating routes — `JEAN_API_KEY` env var |
 | Auto-Observations | ✅ `ObservationGenerator` — patterns above threshold → FieldObservations dispatched in background |
-| Validator Persistence | ✅ `SQLiteObservationStore` — `JEAN_OBS_STORE_PATH` env var (in-memory default) |
 | Query Filters | ✅ `GET /patterns?process_context=X`, `GET /observations?limit=N&offset=N` |
 | Agent Smoke Test | ✅ `scripts/smoke_test_agent.py --dry-run` |
-| Tests | ✅ 125 passing |
+| Tests | ✅ 169 passing, 1 skipped (pynput on macOS) |
 
 ---
 
@@ -201,6 +208,46 @@ POST /ingest
   → ObservationGenerator (confidence >= 0.7)
   → ObservationDispatcher → jean-validator POST /observations/register
 ```
+
+---
+
+## KFabric Integration
+
+Jean feeds validated observations to KFabric via `HttpKFabricAdapter`. Set `JEAN_KFABRIC_URL` to connect to a real KFabric instance:
+
+```bash
+export JEAN_KFABRIC_URL=http://kfabric:8300
+export JEAN_KFABRIC_API_KEY=your-kfabric-token   # optional Bearer auth
+```
+
+When `JEAN_KFABRIC_URL` is unset (default), `MockKFabricAdapter` is used — observations are stored in-memory and no HTTP calls are made. This is the safe default for development.
+
+The adapter retries 5xx errors with exponential backoff (3 attempts: 0.5s / 1s / 2s). 4xx errors (bad request) raise `ValueError` immediately with no retry.
+
+At startup, `jean-validator` checks KFabric `/health` and logs the result. A failing health check never blocks startup — it is a warning only.
+
+### Local KFabric mock service
+
+For integration testing with a real HTTP backend without deploying KFabric:
+
+```bash
+docker compose up kfabric-mock
+# POST http://localhost:8300/ingest
+# GET  http://localhost:8300/health
+# GET  http://localhost:8300/entries
+```
+
+---
+
+## Cross-Platform Capture
+
+| Platform | App transitions | Hotkeys |
+|----------|----------------|---------|
+| macOS | ✅ NSWorkspace (`uv sync --extra macos`) | ✅ pynput (`uv sync --extra capture`) |
+| Linux | ✅ xdotool polling (`sudo apt install xdotool`) | ✅ pynput |
+| Windows | ✅ Win32 ctypes polling (no extra deps) | ✅ pynput |
+
+Linux capture falls back gracefully with a warning if xdotool is not installed. Windows capture uses only standard-library ctypes — no pywin32 required.
 
 ---
 

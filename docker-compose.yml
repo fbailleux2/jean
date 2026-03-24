@@ -46,6 +46,7 @@ services:
       - JEAN_OBS_STORE_PATH=/data/observations.db
       - JEAN_FLOWFABRIC_WEBHOOK=${JEAN_FLOWFABRIC_WEBHOOK:-}
       - JEAN_KFABRIC_URL=${JEAN_KFABRIC_URL:-}
+      - JEAN_KFABRIC_API_KEY=${JEAN_KFABRIC_API_KEY:-}
     volumes:
       - validator-data:/data
     depends_on:

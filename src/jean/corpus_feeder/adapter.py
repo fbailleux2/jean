@@ -13,9 +13,14 @@ Selection via make_adapter():
 KFabric ingest API contract (provisional):
     POST {base_url}/ingest
         body: FieldObservation JSON
+        headers: Authorization: Bearer {JEAN_KFABRIC_API_KEY}  (optional)
         response: {"entry_id": "..."}
     GET  {base_url}/health
         response: {"status": "ok"}
+
+Authentication:
+    Set JEAN_KFABRIC_API_KEY to enable Bearer token auth on all requests.
+    Leave unset for unauthenticated access (development / open mock).
 """
 
 from __future__ import annotations
@@ -32,6 +37,7 @@ from jean.models import FieldObservation, ProcedureState
 log = structlog.get_logger()
 
 _KFABRIC_URL_ENV = "JEAN_KFABRIC_URL"
+_KFABRIC_API_KEY_ENV = "JEAN_KFABRIC_API_KEY"
 _DEFAULT_TIMEOUT = 10.0
 _MAX_RETRIES = 3
 _RETRY_DELAYS = [0.5, 1.0, 2.0]
@@ -137,15 +143,23 @@ class HttpKFabricAdapter(KFabricAdapter):
         self,
         base_url: str | None = None,
         *,
+        api_key: str | None = None,
         timeout: float = _DEFAULT_TIMEOUT,
     ) -> None:
         self.base_url = (base_url or os.environ.get(_KFABRIC_URL_ENV, "")).rstrip("/")
+        self.api_key = api_key or os.environ.get(_KFABRIC_API_KEY_ENV)
         self.timeout = timeout
         if not self.base_url:
             raise ValueError(
                 f"KFabric URL is required. "
                 f"Set JEAN_KFABRIC_URL or pass base_url= to HttpKFabricAdapter."
             )
+
+    def _auth_headers(self) -> dict[str, str]:
+        """Return Authorization header dict when api_key is set, else empty."""
+        if self.api_key:
+            return {"Authorization": f"Bearer {self.api_key}"}
+        return {}
 
     async def submit(self, request: FeedRequest) -> str:
         """POST a validated observation to KFabric /ingest.
@@ -159,7 +173,11 @@ class HttpKFabricAdapter(KFabricAdapter):
         for attempt in range(_MAX_RETRIES):
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    resp = await client.post(f"{self.base_url}/ingest", json=payload)
+                    resp = await client.post(
+                        f"{self.base_url}/ingest",
+                        json=payload,
+                        headers=self._auth_headers(),
+                    )
             except httpx.HTTPError as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES - 1:
@@ -196,7 +214,10 @@ class HttpKFabricAdapter(KFabricAdapter):
         """Return True if KFabric /health responds 200."""
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(f"{self.base_url}/health")
+                resp = await client.get(
+                    f"{self.base_url}/health",
+                    headers=self._auth_headers(),
+                )
             return resp.status_code == 200
         except httpx.HTTPError:
             return False

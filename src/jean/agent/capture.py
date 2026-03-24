@@ -76,20 +76,38 @@ class AppTransitionCapture(BaseCapture):
         return observe_app_transitions
 
     async def events(self) -> AsyncGenerator[BusinessEvent, None]:  # type: ignore[override]
-        if platform.system() != "Darwin":
-            logger.warning(
-                "AppTransitionCapture: macOS only — no events on %s", platform.system()
-            )
-            return
+        sys_platform = platform.system()
 
-        try:
-            observe_app_transitions = self._import_macos()
-            async for app_name, event_type in observe_app_transitions():
-                yield self._make_event(event_type, app_name)
-        except ImportError:
+        if sys_platform == "Darwin":
+            try:
+                observe_app_transitions = self._import_macos()
+                async for app_name, event_type in observe_app_transitions():
+                    yield self._make_event(event_type, app_name)
+            except ImportError:
+                logger.warning(
+                    "pyobjc not installed — AppTransitionCapture unavailable. "
+                    "Install with: uv sync --extra macos"
+                )
+
+        elif sys_platform == "Linux":
+            try:
+                from jean.agent._linux import observe_app_transitions as _linux_obs
+                async for app_name, event_type in _linux_obs():
+                    yield self._make_event(event_type, app_name)
+            except ImportError as exc:
+                logger.warning("Linux capture unavailable: %s", exc)
+
+        elif sys_platform == "Windows":
+            try:
+                from jean.agent._windows import observe_app_transitions as _win_obs
+                async for app_name, event_type in _win_obs():
+                    yield self._make_event(event_type, app_name)
+            except (ImportError, OSError) as exc:
+                logger.warning("Windows capture unavailable: %s", exc)
+
+        else:
             logger.warning(
-                "pyobjc not installed — AppTransitionCapture unavailable. "
-                "Install with: uv sync --extra macos"
+                "AppTransitionCapture: unsupported platform %s — no events", sys_platform
             )
 
 
