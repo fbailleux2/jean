@@ -1,63 +1,77 @@
 """jean-aggregator FastAPI application.
 
-Exposes a single /ingest endpoint that receives batches of BusinessEvents
-from jean-agent instances, anonymizes them, and stores them for pattern
-detection.
-
 Routes:
-    POST /ingest        — receive events from jean-agent
-    GET  /health        — health check
-    GET  /patterns      — list detected PatternHypotheses (last run)
+    POST /ingest            — receive events from jean-agent
+    GET  /health            — health check
+    GET  /patterns          — list detected PatternHypotheses (last run)
+    POST /connectors/erp    — (mounted from erp_webhook router)
+
+Store is selected via JEAN_STORE env var (memory | postgres).
 """
 
 from __future__ import annotations
 
-import asyncio
-import logging
-from datetime import datetime, timezone
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator
 
 import structlog
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import FastAPI
 
 from jean.aggregator.anonymizer import Anonymizer
 from jean.aggregator.pattern_detector import PatternDetector
+from jean.aggregator.store import AbstractStore, InMemoryStore, make_store
+from jean.connectors.erp_webhook import router as erp_router
 from jean.models import BusinessEvent, PatternHypothesis, SessionTrace
 
 log = structlog.get_logger()
-app = FastAPI(title="jean-aggregator", version="0.1.0")
-
-# In-memory store (replace with PostgreSQL in production)
-_events: list[BusinessEvent] = []
-_traces: list[SessionTrace] = []
-_patterns: list[PatternHypothesis] = []
 
 _anonymizer = Anonymizer()
 _detector = PatternDetector(window_size=3, min_frequency=2)
+_patterns: list[PatternHypothesis] = []
+_store: AbstractStore = InMemoryStore()
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    global _store
+    _store = make_store()
+    if hasattr(_store, "connect"):
+        await _store.connect()
+    log.info("jean-aggregator started", store=type(_store).__name__)
+    yield
+    await _store.close()
+
+
+app = FastAPI(title="jean-aggregator", version="0.2.0", lifespan=_lifespan)
+
+
+# Mount ERP connector
+app.include_router(erp_router, prefix="/connectors")
 
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "events_stored": len(_events)}
+    return {"status": "ok", "store": type(_store).__name__}
 
 
 @app.post("/ingest", status_code=202)
 async def ingest(events: list[BusinessEvent]) -> dict:
     """Receive a batch of events from jean-agent.
 
-    Events are anonymized before being stored.
+    Events are anonymized before storage.
     """
     if not events:
         return {"accepted": 0}
 
     clean = _anonymizer.anonymize_many(events)
-    _events.extend(clean)
+    await _store.save_events(clean)
 
     # Group events into session traces
     by_session: dict[str, list[BusinessEvent]] = {}
     for e in clean:
         by_session.setdefault(e.session_id, []).append(e)
 
+    new_traces: list[SessionTrace] = []
     for session_id, session_events in by_session.items():
         trace = SessionTrace(
             session_id=session_id,
@@ -65,16 +79,18 @@ async def ingest(events: list[BusinessEvent]) -> dict:
             process_context=session_events[0].process_context,
             events=sorted(session_events, key=lambda e: e.timestamp),
         )
-        _traces.append(trace)
+        new_traces.append(trace)
 
-    # Re-run pattern detection (could be made async/background in production)
+    await _store.save_traces(new_traces)
+
+    # Re-run pattern detection across all stored traces
+    all_traces = await _store.load_traces()
     global _patterns
-    _patterns = _detector.detect(_traces)
+    _patterns = _detector.detect(all_traces)
 
     log.info(
         "Ingested events",
         count=len(clean),
-        total_events=len(_events),
         patterns_detected=len(_patterns),
     )
     return {"accepted": len(clean), "patterns_detected": len(_patterns)}
@@ -82,5 +98,4 @@ async def ingest(events: list[BusinessEvent]) -> dict:
 
 @app.get("/patterns", response_model=list[PatternHypothesis])
 async def list_patterns() -> list[PatternHypothesis]:
-    """Return the latest detected PatternHypotheses."""
     return _patterns

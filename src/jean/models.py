@@ -181,6 +181,10 @@ class FieldObservation(BaseModel):
         description="PatternHypothesis IDs that support this observation"
     )
     state: ProcedureState = Field(default=ProcedureState.OBSERVED)
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Extensible metadata: rejection_reason, tags, etc.",
+    )
     created_at: datetime = Field(default_factory=_now)
     validated_at: datetime | None = None
     validated_by: str | None = None

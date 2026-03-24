@@ -70,6 +70,11 @@ class AppTransitionCapture(BaseCapture):
     title or document name.
     """
 
+    def _import_macos(self):  # type: ignore[return]
+        """Import the macOS capture module. Separated for testability."""
+        from jean.agent._macos import observe_app_transitions  # type: ignore[import]
+        return observe_app_transitions
+
     async def events(self) -> AsyncGenerator[BusinessEvent, None]:  # type: ignore[override]
         if platform.system() != "Darwin":
             logger.warning(
@@ -78,7 +83,7 @@ class AppTransitionCapture(BaseCapture):
             return
 
         try:
-            from jean.agent._macos import observe_app_transitions  # type: ignore[import]
+            observe_app_transitions = self._import_macos()
             async for app_name, event_type in observe_app_transitions():
                 yield self._make_event(event_type, app_name)
         except ImportError:
