@@ -1,5 +1,7 @@
 # Jean
 
+[![CI](https://github.com/fbailleux2/jean/actions/workflows/ci.yml/badge.svg)](https://github.com/fbailleux2/jean/actions/workflows/ci.yml)
+
 **The silent observer that turns the gap between what your organization says it does and what it actually does into governed intelligence.**
 
 Jean is the lightweight, event-driven field observer of the [Fabric cognitive OS](https://github.com/fbailleux2/flowfabric). It captures the divergence between formal procedures and real field practices, and feeds it — after human validation — into FlowFabric's knowledge corpus.
@@ -25,30 +27,35 @@ Jean is the lightweight, event-driven field observer of the [Fabric cognitive OS
 
 ## Architecture
 
-Jean is decomposed into four sub-components:
+Jean is decomposed into five sub-components plus a bridge:
 
 | Component | Role | Deployment |
 |-----------|------|------------|
 | `jean-agent` | Minimal local event capture | Per workstation (macOS MVP) |
-| `jean-aggregator` | Aggregation, anonymization, pattern detection | Centralized |
-| `jean-validator` | Human validation of field hypotheses | Integrated into FlowFabric |
-| `jean-corpus-feeder` | Governed feeding of KFabric | Connected to aggregator |
+| `jean-aggregator` | Aggregation, anonymization, pattern detection | Centralized (port 8100) |
+| `jean-validator` | Human validation + corpus submission | Standalone API (port 8200) |
+| `jean-corpus-feeder` | Governed feeding of KFabric | Called by validator |
+| `jean-bridges/flowfabric` | Fire-and-forget FlowFabric notification | Embedded in validator |
 
-### Event flow
+### Full event flow
 
 ```
 Workstation
-  jean-agent (captures app transitions, structural actions)
-    ↓ HTTP batch push (offline-first buffer)
-jean-aggregator
-  Anonymizer → strips PII
-  PatternDetector → detects recurring event sequences
-    ↓ PatternHypothesis
-jean-validator (FlowFabric Inbox)
-  Human approves / rejects / annotates
-    ↓ FieldObservation (VALIDATED state)
-jean-corpus-feeder
-  → KFabric (corpus enrichment)
+  jean-agent (app transitions, structural actions)
+    ↓ HTTP batch (offline-first SQLite buffer)
+
+jean-aggregator (port 8100)
+  POST /ingest        → Anonymizer → InMemoryStore / PostgresStore
+  POST /connectors/erp/events → BusinessEvent mapper
+  GET  /patterns      → PatternDetector (sliding-window n-gram)
+    ↓ PatternHypothesis → FieldObservation
+
+jean-validator (port 8200)
+  POST /observations/{id}/approve
+    → VALIDATED state
+    → CorpusPipeline.run() → KFabricAdapter (mock or real)
+    → FlowFabricBridge.notify() (fire-and-forget, optional)
+  POST /observations/{id}/reject → stores rejection_reason in metadata
 ```
 
 ---
@@ -84,12 +91,17 @@ docker compose up --build
 
 ### Environment variables
 
+See `.env.example` for a full list. Key variables:
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `JEAN_AGGREGATOR_URL` | `http://localhost:8100` | jean-aggregator endpoint |
+| `JEAN_STORE` | `memory` | Aggregator store: `memory` or `postgres` |
+| `JEAN_PG_DSN` | — | PostgreSQL DSN (when `JEAN_STORE=postgres`) |
 | `JEAN_PROCESS_CONTEXT` | `default` | Business process being observed |
 | `JEAN_WORKSTATION_ID` | random UUID | Pseudonymous workstation identifier |
 | `JEAN_BUFFER_PATH` | `jean-agent.db` | SQLite buffer path |
+| `JEAN_FLOWFABRIC_WEBHOOK` | — | FlowFabric notification URL (optional) |
 
 ---
 
@@ -109,7 +121,8 @@ docker compose up --build
 | jean-corpus-feeder KFabricAdapter | ✅ mock implementation |
 | jean-validator | 🔜 FlowFabric integration (next milestone) |
 | macOS NSWorkspace capture | 🔜 requires pyobjc (next milestone) |
-| Tests | ✅ models, buffer, anonymizer, pattern detector |
+| GitHub Actions CI | ✅ `.github/workflows/ci.yml` |
+| Tests | ✅ 62 passing (models, buffer, anonymizer, detector, store, ERP, validator, pipeline, bridge) |
 
 ---
 

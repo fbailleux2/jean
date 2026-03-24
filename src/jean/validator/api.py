@@ -13,6 +13,10 @@ Routes:
 Truth level rule (from VISION.md §14):
   OBSERVED → VALIDATED requires explicit human approval (author + timestamp + context).
   A VALIDATED observation can never be reverted to OBSERVED via the API.
+
+Post-approval pipeline:
+  1. CorpusPipeline.run(obs) → corpus entry ID stored in obs.metadata
+  2. FlowFabricBridge.notify(obs) → fire-and-forget webhook (no-op if unconfigured)
 """
 
 from __future__ import annotations
@@ -23,13 +27,19 @@ import structlog
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
+from jean.bridges.flowfabric import FlowFabricBridge
+from jean.corpus_feeder.pipeline import CorpusPipeline
 from jean.models import FieldObservation, ProcedureState
 
 log = structlog.get_logger()
-app = FastAPI(title="jean-validator", version="0.1.0")
+app = FastAPI(title="jean-validator", version="0.2.0")
 
 # In-memory store for MVP
 _observations: dict[str, FieldObservation] = {}
+
+# Singletons — injectable for tests via module-level replacement
+_pipeline: CorpusPipeline = CorpusPipeline()
+_bridge: FlowFabricBridge = FlowFabricBridge()
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +98,10 @@ async def list_observations(state: str | None = None) -> list[FieldObservation]:
 async def approve_observation(obs_id: str, req: ApproveRequest) -> FieldObservation:
     """Validate an observation — moves it to VALIDATED state.
 
+    Post-approval:
+    - Submits to CorpusPipeline → KFabric (corpus entry ID stored in metadata)
+    - Notifies FlowFabric bridge (fire-and-forget, no-op if unconfigured)
+
     Governance rule: once VALIDATED, an observation cannot be reverted.
     """
     obs = _get_or_404(obs_id)
@@ -102,11 +116,23 @@ async def approve_observation(obs_id: str, req: ApproveRequest) -> FieldObservat
             "validated_by": req.validator_id,
         }
     )
+
+    # Submit to corpus pipeline
+    corpus_id = await _pipeline.run(validated)
+    validated = validated.model_copy(
+        update={"metadata": {**validated.metadata, "corpus_entry_id": corpus_id}}
+    )
+
     _observations[obs_id] = validated
+
+    # Fire-and-forget FlowFabric notification
+    await _bridge.notify(validated)
+
     log.info(
         "Observation approved",
         obs_id=obs_id,
         validator_id=req.validator_id,
+        corpus_entry_id=corpus_id,
     )
     return validated
 
@@ -152,3 +178,15 @@ def register_observation(obs: FieldObservation) -> None:
 def get_store() -> dict[str, FieldObservation]:
     """Expose the store for testing."""
     return _observations
+
+
+def set_pipeline(pipeline: CorpusPipeline) -> None:
+    """Replace the CorpusPipeline singleton (for testing)."""
+    global _pipeline
+    _pipeline = pipeline
+
+
+def set_bridge(bridge: FlowFabricBridge) -> None:
+    """Replace the FlowFabricBridge singleton (for testing)."""
+    global _bridge
+    _bridge = bridge
