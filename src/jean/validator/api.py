@@ -33,6 +33,8 @@ from fastapi.staticfiles import StaticFiles
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, Field, field_validator
 
+from enum import StrEnum
+
 from jean.auth import require_auth
 from jean.bridges.flowfabric import FlowFabricBridge
 from jean.corpus_feeder.pipeline import CorpusPipeline
@@ -201,6 +203,67 @@ async def reject_observation(
     await _store.update(rejected)
     log.info("Observation rejected", obs_id=obs_id, reason=req.rejection_reason)
     return rejected
+
+
+# ---------------------------------------------------------------------------
+# FlowFabric bi-directional webhook
+# ---------------------------------------------------------------------------
+
+
+class _WebhookAction(StrEnum):
+    APPROVE = "approve"
+    REJECT = "reject"
+
+
+class FlowFabricWebhookRequest(BaseModel):
+    observation_id: str
+    action: _WebhookAction
+    validator_id: str = Field(default="flowfabric")
+    reason: str = Field(default="")
+
+
+@app.post("/webhook/flowfabric", response_model=FieldObservation)
+async def flowfabric_webhook(req: FlowFabricWebhookRequest) -> FieldObservation:
+    """Receive an approve/reject command from FlowFabric.
+
+    FlowFabric calls this endpoint after a human validates an observation
+    in the FlowFabric Inbox. The callback_url in the notify() payload points here.
+    """
+    obs = await _get_or_404(req.observation_id)
+
+    if req.action == _WebhookAction.APPROVE:
+        if obs.state == ProcedureState.VALIDATED:
+            raise HTTPException(status_code=409, detail="Observation is already VALIDATED")
+
+        validated = obs.model_copy(
+            update={
+                "state": ProcedureState.VALIDATED,
+                "validated_at": datetime.now(timezone.utc),
+                "validated_by": req.validator_id,
+            }
+        )
+        corpus_id = await _pipeline.run(validated)
+        validated = validated.model_copy(
+            update={"metadata": {**validated.metadata, "corpus_entry_id": corpus_id}}
+        )
+        await _store.update(validated)
+        await _bridge.notify(validated)
+        log.info("FlowFabric webhook: approved", obs_id=req.observation_id)
+        return validated
+
+    else:  # REJECT
+        if obs.state == ProcedureState.VALIDATED:
+            raise HTTPException(status_code=409, detail="A VALIDATED observation cannot be rejected")
+
+        updated_metadata = dict(obs.metadata)
+        updated_metadata["rejection_reason"] = req.reason
+        updated_metadata["rejected_by"] = req.validator_id
+        rejected = obs.model_copy(
+            update={"state": ProcedureState.OBSERVED, "metadata": updated_metadata}
+        )
+        await _store.update(rejected)
+        log.info("FlowFabric webhook: rejected", obs_id=req.observation_id)
+        return rejected
 
 
 # ---------------------------------------------------------------------------

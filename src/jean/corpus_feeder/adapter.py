@@ -20,6 +20,7 @@ KFabric ingest API contract (provisional):
 
 from __future__ import annotations
 
+import asyncio
 import os
 from abc import ABC, abstractmethod
 
@@ -32,6 +33,8 @@ log = structlog.get_logger()
 
 _KFABRIC_URL_ENV = "JEAN_KFABRIC_URL"
 _DEFAULT_TIMEOUT = 10.0
+_MAX_RETRIES = 3
+_RETRY_DELAYS = [0.5, 1.0, 2.0]
 
 
 class FeedRequest:
@@ -147,32 +150,47 @@ class HttpKFabricAdapter(KFabricAdapter):
     async def submit(self, request: FeedRequest) -> str:
         """POST a validated observation to KFabric /ingest.
 
+        Retries up to 3 times on 5xx / network errors with exponential backoff.
         Returns the corpus entry ID from the response.
         """
         payload = request.observation.model_dump(mode="json")
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        last_exc: Exception | None = None
+
+        for attempt in range(_MAX_RETRIES):
             try:
-                resp = await client.post(f"{self.base_url}/ingest", json=payload)
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    resp = await client.post(f"{self.base_url}/ingest", json=payload)
             except httpx.HTTPError as exc:
-                raise RuntimeError(f"KFabric unreachable: {exc}") from exc
+                last_exc = exc
+                if attempt < _MAX_RETRIES - 1:
+                    await asyncio.sleep(_RETRY_DELAYS[attempt])
+                continue
 
-        if 400 <= resp.status_code < 500:
-            raise ValueError(
-                f"KFabric rejected observation (HTTP {resp.status_code}): {resp.text}"
-            )
-        if resp.status_code >= 500:
-            raise RuntimeError(
-                f"KFabric server error (HTTP {resp.status_code}): {resp.text}"
-            )
+            if 400 <= resp.status_code < 500:
+                raise ValueError(
+                    f"KFabric rejected observation (HTTP {resp.status_code}): {resp.text}"
+                )
+            if resp.status_code >= 500:
+                last_exc = RuntimeError(
+                    f"KFabric server error (HTTP {resp.status_code}): {resp.text}"
+                )
+                if attempt < _MAX_RETRIES - 1:
+                    await asyncio.sleep(_RETRY_DELAYS[attempt])
+                continue
 
-        data = resp.json()
-        entry_id: str = data.get("entry_id", f"kfabric-{request.observation.id[:8]}")
-        log.info(
-            "HttpKFabric: observation submitted",
-            entry_id=entry_id,
-            observation_id=request.observation.id,
-        )
-        return entry_id
+            data = resp.json()
+            entry_id: str = data.get("entry_id", f"kfabric-{request.observation.id[:8]}")
+            log.info(
+                "HttpKFabric: observation submitted",
+                entry_id=entry_id,
+                observation_id=request.observation.id,
+                attempt=attempt + 1,
+            )
+            return entry_id
+
+        raise RuntimeError(
+            f"KFabric unreachable after {_MAX_RETRIES} attempts: {last_exc}"
+        ) from last_exc
 
     async def health(self) -> bool:
         """Return True if KFabric /health responds 200."""
