@@ -24,12 +24,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import structlog
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, Field, field_validator
 
+from jean.auth import require_auth
 from jean.bridges.flowfabric import FlowFabricBridge
 from jean.corpus_feeder.pipeline import CorpusPipeline
 from jean.models import FieldObservation, ProcedureState
@@ -99,7 +100,7 @@ async def list_observations(state: str | None = None) -> list[FieldObservation]:
 
 
 @app.post("/observations/{obs_id}/approve", response_model=FieldObservation)
-async def approve_observation(obs_id: str, req: ApproveRequest) -> FieldObservation:
+async def approve_observation(obs_id: str, req: ApproveRequest, _: None = Depends(require_auth)) -> FieldObservation:
     """Validate an observation — moves it to VALIDATED state.
 
     Post-approval:
@@ -142,7 +143,7 @@ async def approve_observation(obs_id: str, req: ApproveRequest) -> FieldObservat
 
 
 @app.post("/observations/{obs_id}/reject", response_model=FieldObservation)
-async def reject_observation(obs_id: str, req: RejectRequest) -> FieldObservation:
+async def reject_observation(obs_id: str, req: RejectRequest, _: None = Depends(require_auth)) -> FieldObservation:
     """Reject an observation — keeps it OBSERVED but stores the rejection reason."""
     obs = _get_or_404(obs_id)
 
@@ -174,8 +175,16 @@ async def reject_observation(obs_id: str, req: RejectRequest) -> FieldObservatio
 # ---------------------------------------------------------------------------
 
 
+@app.post("/observations/register", response_model=FieldObservation, status_code=201)
+async def register_observation_route(obs: FieldObservation) -> FieldObservation:
+    """Register a FieldObservation sent by the aggregator (auto-generated)."""
+    _observations[obs.id] = obs
+    log.info("Observation registered", obs_id=obs.id, process_context=obs.process_context)
+    return obs
+
+
 def register_observation(obs: FieldObservation) -> None:
-    """Register a new FieldObservation for human review."""
+    """Register a new FieldObservation for human review (internal helper)."""
     _observations[obs.id] = obs
 
 

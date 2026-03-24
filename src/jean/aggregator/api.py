@@ -15,12 +15,14 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 import structlog
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from jean.aggregator.anonymizer import Anonymizer
+from jean.aggregator.observation_generator import ObservationDispatcher, ObservationGenerator
 from jean.aggregator.pattern_detector import PatternDetector
 from jean.aggregator.store import AbstractStore, InMemoryStore, make_store
+from jean.auth import require_auth
 from jean.connectors.erp_webhook import router as erp_router
 from jean.models import BusinessEvent, PatternHypothesis, SessionTrace
 
@@ -30,6 +32,8 @@ _anonymizer = Anonymizer()
 _detector = PatternDetector(window_size=3, min_frequency=2)
 _patterns: list[PatternHypothesis] = []
 _store: AbstractStore = InMemoryStore()
+_obs_generator = ObservationGenerator()
+_obs_dispatcher = ObservationDispatcher()
 
 
 @asynccontextmanager
@@ -47,8 +51,8 @@ app = FastAPI(title="jean-aggregator", version="0.2.0", lifespan=_lifespan)
 Instrumentator().instrument(app).expose(app)
 
 
-# Mount ERP connector
-app.include_router(erp_router, prefix="/connectors")
+# Mount ERP connector — protected routes
+app.include_router(erp_router, prefix="/connectors", dependencies=[Depends(require_auth)])
 
 
 @app.get("/health")
@@ -57,7 +61,7 @@ async def health() -> dict:
 
 
 @app.post("/ingest", status_code=202)
-async def ingest(events: list[BusinessEvent]) -> dict:
+async def ingest(events: list[BusinessEvent], _: None = Depends(require_auth)) -> dict:
     """Receive a batch of events from jean-agent.
 
     Events are anonymized before storage.
@@ -90,12 +94,18 @@ async def ingest(events: list[BusinessEvent]) -> dict:
     global _patterns
     _patterns = _detector.detect(all_traces)
 
+    # Auto-generate FieldObservations from high-confidence patterns
+    observations = _obs_generator.generate(_patterns)
+    for obs in observations:
+        await _obs_dispatcher.dispatch(obs)
+
     log.info(
         "Ingested events",
         count=len(clean),
         patterns_detected=len(_patterns),
+        observations_generated=len(observations),
     )
-    return {"accepted": len(clean), "patterns_detected": len(_patterns)}
+    return {"accepted": len(clean), "patterns_detected": len(_patterns), "observations_generated": len(observations)}
 
 
 @app.get("/patterns", response_model=list[PatternHypothesis])

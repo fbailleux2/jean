@@ -24,6 +24,8 @@ services:
       - JEAN_LOG_LEVEL=info
       - JEAN_STORE=postgres
       - JEAN_PG_DSN=postgresql://jean:jean@postgres/jean
+      - JEAN_API_KEY=${JEAN_API_KEY:-}
+      - JEAN_VALIDATOR_URL=http://validator:8200
     depends_on:
       postgres:
         condition: service_healthy
@@ -40,6 +42,7 @@ services:
       - "8200:8200"
     environment:
       - JEAN_LOG_LEVEL=info
+      - JEAN_API_KEY=${JEAN_API_KEY:-}
       - JEAN_FLOWFABRIC_WEBHOOK=${JEAN_FLOWFABRIC_WEBHOOK:-}
       - JEAN_KFABRIC_URL=${JEAN_KFABRIC_URL:-}
     depends_on:

@@ -101,6 +101,9 @@ See `.env.example` for a full list. Key variables:
 | `JEAN_PROCESS_CONTEXT` | `default` | Business process being observed |
 | `JEAN_WORKSTATION_ID` | random UUID | Pseudonymous workstation identifier |
 | `JEAN_BUFFER_PATH` | `jean-agent.db` | SQLite buffer path |
+| `JEAN_API_KEY` | — | X-API-Key for protected routes (unset = auth disabled) |
+| `JEAN_VALIDATOR_URL` | — | Validator URL for auto-observation dispatch (unset = disabled) |
+| `JEAN_OBS_THRESHOLD` | `0.7` | Min confidence to auto-generate FieldObservations |
 | `JEAN_FLOWFABRIC_WEBHOOK` | — | FlowFabric notification URL (optional) |
 
 ---
@@ -125,7 +128,48 @@ See `.env.example` for a full list. Key variables:
 | Prometheus metrics | ✅ `GET /metrics` on aggregator (8100) and validator (8200) |
 | KFabric HTTP adapter | ✅ `HttpKFabricAdapter` — real HTTP client, `MockKFabricAdapter` default |
 | Validator UI | ✅ `GET /ui/` — approve/reject interface, no build step |
-| Tests | ✅ 74 passing (models, buffer, anonymizer, detector, store, ERP, validator, pipeline, bridge, adapter, metrics) |
+| API Key Auth | ✅ `X-API-Key` header on all mutating routes — `JEAN_API_KEY` env var |
+| Auto-Observations | ✅ `ObservationGenerator` — patterns above threshold → FieldObservations dispatched to validator |
+| Agent Smoke Test | ✅ `scripts/smoke_test_agent.py --dry-run` |
+| Tests | ✅ 94 passing (models, buffer, anonymizer, detector, store, ERP, validator, pipeline, bridge, adapter, metrics, auth, observation-generator) |
+
+---
+
+## API Key Authentication
+
+Protected routes (`POST /ingest`, `POST /connectors/erp/events`, `POST /observations/{id}/approve`, `POST /observations/{id}/reject`) require an `X-API-Key` header when `JEAN_API_KEY` is set.
+
+Public routes (`GET /health`, `GET /metrics`, `GET /observations`) require no key.
+
+```bash
+# Set in production
+export JEAN_API_KEY=my-secret-key
+
+# Call a protected route
+curl -X POST http://localhost:8100/ingest \
+  -H "X-API-Key: my-secret-key" \
+  -H "Content-Type: application/json" \
+  -d '[...]'
+```
+
+Error responses: `401 Unauthorized` (missing header) · `403 Forbidden` (wrong key)
+
+---
+
+## Auto-Observations
+
+After each `/ingest` call, the aggregator runs `ObservationGenerator` on the detected patterns. Any `PatternHypothesis` with `confidence >= JEAN_OBS_THRESHOLD` (default `0.7`) is converted into a `FieldObservation` and POSTed to `JEAN_VALIDATOR_URL/observations/register`.
+
+The dispatch is **fire-and-forget**: failures are logged but never propagate to the caller. If `JEAN_VALIDATOR_URL` is unset, dispatch is skipped entirely.
+
+```
+POST /ingest
+  → Anonymizer
+  → Store
+  → PatternDetector
+  → ObservationGenerator (confidence >= 0.7)
+  → ObservationDispatcher → jean-validator POST /observations/register
+```
 
 ---
 
