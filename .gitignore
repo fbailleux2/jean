@@ -205,3 +205,15 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Jean local data
+jean-agent.db
+*.db-shm
+*.db-wal
+jean-buffer/
+.env
+.env.*
+!.env.example
+
+# macOS
+.DS_Store

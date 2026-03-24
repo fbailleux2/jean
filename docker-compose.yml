@@ -1,0 +1,32 @@
+services:
+  aggregator:
+    build: .
+    command: jean-aggregator
+    ports:
+      - "8100:8100"
+    environment:
+      - JEAN_LOG_LEVEL=info
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8100/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # jean-agent runs on each workstation — not in compose for production
+  # This service is for local development/testing only
+  agent-dev:
+    build: .
+    command: jean-agent
+    environment:
+      - JEAN_AGGREGATOR_URL=http://aggregator:8100
+      - JEAN_PROCESS_CONTEXT=invoice-exception
+      - JEAN_WORKSTATION_ID=dev-workstation-001
+      - JEAN_BUFFER_PATH=/data/jean-agent.db
+    volumes:
+      - agent-data:/data
+    depends_on:
+      aggregator:
+        condition: service_healthy
+
+volumes:
+  agent-data:
