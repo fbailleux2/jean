@@ -43,7 +43,7 @@ async def observe_app_transitions() -> AsyncGenerator[_AppFocusEvent, None]:
         ) from exc
 
     queue: asyncio.Queue[_AppFocusEvent] = asyncio.Queue()
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     class _Observer(AppKit.NSObject):  # type: ignore[misc]
         def appDidActivate_(self, notification: object) -> None:

@@ -129,13 +129,16 @@ See `.env.example` for a full list. Key variables:
 | Prometheus metrics | ✅ `GET /metrics` on aggregator (8100) and validator (8200) |
 | KFabric HTTP adapter | ✅ `HttpKFabricAdapter` — real HTTP client, `MockKFabricAdapter` default |
 | Validator UI | ✅ `GET /ui/` — approve/reject interface, no build step |
+| End-to-end integration test | ✅ `tests/test_integration.py` — full pipeline from buffer to approval |
+| macOS thread bridge | ✅ `asyncio.get_running_loop()`, thread simulation tests |
+| DPIA template | ✅ `docs/dpia-template.md` + `docs/consent-notice-template.md` |
 | API Key Auth | ✅ `X-API-Key` header on all mutating routes — `JEAN_API_KEY` env var |
 | EventEmitter Auth | ✅ `JEAN_API_KEY` forwarded in agent→aggregator HTTP flush |
 | Auto-Observations | ✅ `ObservationGenerator` — patterns above threshold → FieldObservations dispatched in background |
 | Validator Persistence | ✅ `SQLiteObservationStore` — `JEAN_OBS_STORE_PATH` env var (in-memory default) |
 | Query Filters | ✅ `GET /patterns?process_context=X`, `GET /observations?limit=N&offset=N` |
 | Agent Smoke Test | ✅ `scripts/smoke_test_agent.py --dry-run` |
-| Tests | ✅ 111 passing |
+| Tests | ✅ 125 passing |
 
 ---
 
@@ -198,6 +201,32 @@ POST /ingest
   → ObservationGenerator (confidence >= 0.7)
   → ObservationDispatcher → jean-validator POST /observations/register
 ```
+
+---
+
+## End-to-End Testing
+
+`tests/test_integration.py` exercises the complete pipeline in-process:
+
+```
+LocalBuffer (agent) → aggregator /ingest → PatternDetector
+  → ObservationGenerator → validator /observations/register
+  → /observations/{id}/approve → CorpusPipeline
+```
+
+Run with: `uv run pytest tests/test_integration.py -v`
+
+---
+
+## Legal / GDPR
+
+See [`docs/dpia-template.md`](docs/dpia-template.md) for a DPIA template aligned with
+GDPR Art. 35 and CNIL guidelines.
+
+See [`docs/consent-notice-template.md`](docs/consent-notice-template.md) for an employee
+information notice template to distribute before any real deployment.
+
+> ⚠️ Templates only — consult a qualified DPO before processing employee data.
 
 ---
 
