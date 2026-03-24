@@ -11,6 +11,7 @@ Store is selected via JEAN_STORE env var (memory | postgres).
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -94,10 +95,10 @@ async def ingest(events: list[BusinessEvent], _: None = Depends(require_auth)) -
     global _patterns
     _patterns = _detector.detect(all_traces)
 
-    # Auto-generate FieldObservations from high-confidence patterns
+    # Auto-generate FieldObservations and dispatch in the background (fire-and-forget)
     observations = _obs_generator.generate(_patterns)
     for obs in observations:
-        await _obs_dispatcher.dispatch(obs)
+        asyncio.create_task(_obs_dispatcher.dispatch(obs))
 
     log.info(
         "Ingested events",
@@ -109,5 +110,7 @@ async def ingest(events: list[BusinessEvent], _: None = Depends(require_auth)) -
 
 
 @app.get("/patterns", response_model=list[PatternHypothesis])
-async def list_patterns() -> list[PatternHypothesis]:
+async def list_patterns(process_context: str | None = None) -> list[PatternHypothesis]:
+    if process_context:
+        return [p for p in _patterns if p.process_context == process_context]
     return _patterns

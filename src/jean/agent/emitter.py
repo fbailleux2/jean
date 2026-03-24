@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 
 import httpx
 
@@ -16,6 +17,7 @@ from jean.agent.buffer import LocalBuffer
 logger = logging.getLogger(__name__)
 
 _DEFAULT_AGGREGATOR_URL = "http://localhost:8100"
+_API_KEY_ENV = "JEAN_API_KEY"
 
 
 class EventEmitter:
@@ -28,12 +30,20 @@ class EventEmitter:
         *,
         batch_size: int = 100,
         flush_interval_seconds: float = 10.0,
+        api_key: str | None = None,
     ) -> None:
         self.buffer = buffer
         self.aggregator_url = aggregator_url.rstrip("/")
         self.batch_size = batch_size
         self.flush_interval = flush_interval_seconds
         self._running = False
+        # Explicit constructor value takes precedence; fall back to env var
+        self.api_key: str | None = api_key if api_key is not None else os.environ.get(_API_KEY_ENV) or None
+
+    def _auth_headers(self) -> dict[str, str]:
+        if self.api_key:
+            return {"X-API-Key": self.api_key}
+        return {}
 
     async def flush_once(self) -> int:
         """Flush one batch.  Returns number of events sent."""
@@ -47,6 +57,7 @@ class EventEmitter:
                 resp = await client.post(
                     f"{self.aggregator_url}/ingest",
                     json=payload,
+                    headers=self._auth_headers(),
                 )
                 resp.raise_for_status()
             await self.buffer.mark_sent([e.id for e in events])

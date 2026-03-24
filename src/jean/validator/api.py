@@ -7,6 +7,7 @@ For MVP this is a standalone REST API.
 
 Routes:
     GET  /observations              — list pending (OBSERVED) observations
+    POST /observations/register     — register a new observation (from aggregator)
     POST /observations/{id}/approve — validate an observation
     POST /observations/{id}/reject  — reject an observation with reason
 
@@ -21,7 +22,9 @@ Post-approval pipeline:
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from typing import AsyncGenerator
 
 import structlog
 from fastapi import Depends, FastAPI, HTTPException
@@ -34,17 +37,30 @@ from jean.auth import require_auth
 from jean.bridges.flowfabric import FlowFabricBridge
 from jean.corpus_feeder.pipeline import CorpusPipeline
 from jean.models import FieldObservation, ProcedureState
+from jean.validator.store import InMemoryObservationStore, ObservationStore, make_obs_store
 
 log = structlog.get_logger()
-app = FastAPI(title="jean-validator", version="0.2.0")
-Instrumentator().instrument(app).expose(app)
 
-# In-memory store for MVP
-_observations: dict[str, FieldObservation] = {}
+# Store singleton — replaced via set_store() in tests
+_store: ObservationStore = InMemoryObservationStore()
 
 # Singletons — injectable for tests via module-level replacement
 _pipeline: CorpusPipeline = CorpusPipeline()
 _bridge: FlowFabricBridge = FlowFabricBridge()
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    global _store
+    _store = make_obs_store()
+    await _store.open()
+    log.info("jean-validator started", store=type(_store).__name__)
+    yield
+    await _store.close()
+
+
+app = FastAPI(title="jean-validator", version="0.3.0", lifespan=_lifespan)
+Instrumentator().instrument(app).expose(app)
 
 
 # ---------------------------------------------------------------------------
@@ -73,8 +89,8 @@ class RejectRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _get_or_404(obs_id: str) -> FieldObservation:
-    obs = _observations.get(obs_id)
+async def _get_or_404(obs_id: str) -> FieldObservation:
+    obs = await _store.get(obs_id)
     if obs is None:
         raise HTTPException(status_code=404, detail=f"Observation {obs_id!r} not found")
     return obs
@@ -87,20 +103,35 @@ def _get_or_404(obs_id: str) -> FieldObservation:
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "observations": len(_observations)}
+    all_obs = await _store.list()
+    return {"status": "ok", "observations": len(all_obs)}
 
 
 @app.get("/observations", response_model=list[FieldObservation])
-async def list_observations(state: str | None = None) -> list[FieldObservation]:
-    """List observations, optionally filtered by state."""
-    obs = list(_observations.values())
-    if state:
-        obs = [o for o in obs if o.state.value == state]
+async def list_observations(
+    state: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[FieldObservation]:
+    """List observations, optionally filtered by state, with pagination."""
+    obs = await _store.list(state)
+    return obs[offset : offset + limit]
+
+
+# NOTE: /observations/register must be defined before /observations/{obs_id}/...
+# so FastAPI matches the literal path first.
+@app.post("/observations/register", response_model=FieldObservation, status_code=201)
+async def register_observation_route(obs: FieldObservation) -> FieldObservation:
+    """Register a FieldObservation sent by the aggregator (auto-generated)."""
+    await _store.save(obs)
+    log.info("Observation registered", obs_id=obs.id, process_context=obs.process_context)
     return obs
 
 
 @app.post("/observations/{obs_id}/approve", response_model=FieldObservation)
-async def approve_observation(obs_id: str, req: ApproveRequest, _: None = Depends(require_auth)) -> FieldObservation:
+async def approve_observation(
+    obs_id: str, req: ApproveRequest, _: None = Depends(require_auth)
+) -> FieldObservation:
     """Validate an observation — moves it to VALIDATED state.
 
     Post-approval:
@@ -109,7 +140,7 @@ async def approve_observation(obs_id: str, req: ApproveRequest, _: None = Depend
 
     Governance rule: once VALIDATED, an observation cannot be reverted.
     """
-    obs = _get_or_404(obs_id)
+    obs = await _get_or_404(obs_id)
 
     if obs.state == ProcedureState.VALIDATED:
         raise HTTPException(status_code=409, detail="Observation is already VALIDATED")
@@ -128,7 +159,7 @@ async def approve_observation(obs_id: str, req: ApproveRequest, _: None = Depend
         update={"metadata": {**validated.metadata, "corpus_entry_id": corpus_id}}
     )
 
-    _observations[obs_id] = validated
+    await _store.update(validated)
 
     # Fire-and-forget FlowFabric notification
     await _bridge.notify(validated)
@@ -143,9 +174,11 @@ async def approve_observation(obs_id: str, req: ApproveRequest, _: None = Depend
 
 
 @app.post("/observations/{obs_id}/reject", response_model=FieldObservation)
-async def reject_observation(obs_id: str, req: RejectRequest, _: None = Depends(require_auth)) -> FieldObservation:
+async def reject_observation(
+    obs_id: str, req: RejectRequest, _: None = Depends(require_auth)
+) -> FieldObservation:
     """Reject an observation — keeps it OBSERVED but stores the rejection reason."""
-    obs = _get_or_404(obs_id)
+    obs = await _get_or_404(obs_id)
 
     if obs.state == ProcedureState.VALIDATED:
         raise HTTPException(
@@ -165,32 +198,33 @@ async def reject_observation(obs_id: str, req: RejectRequest, _: None = Depends(
             "metadata": updated_metadata,
         }
     )
-    _observations[obs_id] = rejected
+    await _store.update(rejected)
     log.info("Observation rejected", obs_id=obs_id, reason=req.rejection_reason)
     return rejected
 
 
 # ---------------------------------------------------------------------------
-# Internal: register an observation (called by aggregator or corpus-feeder)
+# Helpers for tests and internal callers
 # ---------------------------------------------------------------------------
 
 
-@app.post("/observations/register", response_model=FieldObservation, status_code=201)
-async def register_observation_route(obs: FieldObservation) -> FieldObservation:
-    """Register a FieldObservation sent by the aggregator (auto-generated)."""
-    _observations[obs.id] = obs
-    log.info("Observation registered", obs_id=obs.id, process_context=obs.process_context)
-    return obs
-
-
 def register_observation(obs: FieldObservation) -> None:
-    """Register a new FieldObservation for human review (internal helper)."""
-    _observations[obs.id] = obs
+    """Synchronously register a FieldObservation for tests (uses raw dict on InMemoryStore)."""
+    if isinstance(_store, InMemoryObservationStore):
+        _store.raw()[obs.id] = obs
+    else:
+        raise RuntimeError("register_observation() is only supported with InMemoryObservationStore")
 
 
-def get_store() -> dict[str, FieldObservation]:
+def get_store() -> ObservationStore:
     """Expose the store for testing."""
-    return _observations
+    return _store
+
+
+def set_store(store: ObservationStore) -> None:
+    """Replace the store singleton (for testing)."""
+    global _store
+    _store = store
 
 
 def set_pipeline(pipeline: CorpusPipeline) -> None:

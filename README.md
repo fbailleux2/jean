@@ -104,6 +104,7 @@ See `.env.example` for a full list. Key variables:
 | `JEAN_API_KEY` | — | X-API-Key for protected routes (unset = auth disabled) |
 | `JEAN_VALIDATOR_URL` | — | Validator URL for auto-observation dispatch (unset = disabled) |
 | `JEAN_OBS_THRESHOLD` | `0.7` | Min confidence to auto-generate FieldObservations |
+| `JEAN_OBS_STORE_PATH` | — | SQLite path for validator persistence (unset = in-memory) |
 | `JEAN_FLOWFABRIC_WEBHOOK` | — | FlowFabric notification URL (optional) |
 
 ---
@@ -129,9 +130,12 @@ See `.env.example` for a full list. Key variables:
 | KFabric HTTP adapter | ✅ `HttpKFabricAdapter` — real HTTP client, `MockKFabricAdapter` default |
 | Validator UI | ✅ `GET /ui/` — approve/reject interface, no build step |
 | API Key Auth | ✅ `X-API-Key` header on all mutating routes — `JEAN_API_KEY` env var |
-| Auto-Observations | ✅ `ObservationGenerator` — patterns above threshold → FieldObservations dispatched to validator |
+| EventEmitter Auth | ✅ `JEAN_API_KEY` forwarded in agent→aggregator HTTP flush |
+| Auto-Observations | ✅ `ObservationGenerator` — patterns above threshold → FieldObservations dispatched in background |
+| Validator Persistence | ✅ `SQLiteObservationStore` — `JEAN_OBS_STORE_PATH` env var (in-memory default) |
+| Query Filters | ✅ `GET /patterns?process_context=X`, `GET /observations?limit=N&offset=N` |
 | Agent Smoke Test | ✅ `scripts/smoke_test_agent.py --dry-run` |
-| Tests | ✅ 94 passing (models, buffer, anonymizer, detector, store, ERP, validator, pipeline, bridge, adapter, metrics, auth, observation-generator) |
+| Tests | ✅ 111 passing |
 
 ---
 
@@ -153,6 +157,30 @@ curl -X POST http://localhost:8100/ingest \
 ```
 
 Error responses: `401 Unauthorized` (missing header) · `403 Forbidden` (wrong key)
+
+---
+
+## Validator Persistence
+
+By default, jean-validator keeps observations in memory (lost on restart). Set `JEAN_OBS_STORE_PATH` to a file path to enable SQLite persistence:
+
+```bash
+export JEAN_OBS_STORE_PATH=/data/observations.db
+```
+
+In Docker Compose this is already configured with a named volume (`validator-data`).
+
+---
+
+## Query Filters
+
+```bash
+# Patterns for a specific process context
+GET /patterns?process_context=invoice-exception
+
+# Paginated observations (newest UI pattern: offset=0 limit=20)
+GET /observations?state=observed&limit=20&offset=0
+```
 
 ---
 
