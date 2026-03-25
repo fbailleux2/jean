@@ -39,6 +39,8 @@ from jean.auth import require_auth
 from jean.bridges.flowfabric import FlowFabricBridge
 from jean.corpus_feeder.adapter import make_adapter
 from jean.corpus_feeder.pipeline import CorpusPipeline
+from jean.doc_generator.builder import DocumentBuilder
+from jean.doc_generator.rule_extractor import BusinessRuleExtractor
 from jean.models import FieldObservation, ProcedureState
 from jean.process_mapper.api import router as process_router
 from jean.validator.store import InMemoryObservationStore, ObservationStore, make_obs_store
@@ -315,6 +317,37 @@ def set_bridge(bridge: FlowFabricBridge) -> None:
     """Replace the FlowFabricBridge singleton (for testing)."""
     global _bridge
     _bridge = bridge
+
+
+# ---------------------------------------------------------------------------
+# Process export endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get("/process-mapper/{process_id}/export/markdown")
+async def export_process_markdown(process_id: str) -> dict:
+    """Export a ProcessDefinition as a Markdown document.
+
+    Returns the Markdown as a JSON field for API consistency.
+    """
+    from jean.process_mapper.api import get_store
+    process = get_store().get(process_id)
+    if not process:
+        raise HTTPException(status_code=404, detail="Process not found")
+    builder = DocumentBuilder()
+    markdown = builder.to_markdown(process)
+    return {"process_id": process_id, "format": "markdown", "content": markdown}
+
+
+@app.get("/process-mapper/{process_id}/export/json")
+async def export_process_json(process_id: str) -> dict:
+    """Export a ProcessDefinition as machine-readable JSON (KFabric-compatible)."""
+    from jean.process_mapper.api import get_store
+    process = get_store().get(process_id)
+    if not process:
+        raise HTTPException(status_code=404, detail="Process not found")
+    builder = DocumentBuilder()
+    return builder.to_json(process)
 
 
 # ---------------------------------------------------------------------------
