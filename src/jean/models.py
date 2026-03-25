@@ -39,6 +39,10 @@ class EventType(StrEnum):
     ANNOTATION = "annotation"       # Explicit operator annotation
     ERP_EVENT = "erp_event"         # Inbound event from ERP / external system
     CUSTOM = "custom"               # Any other captured action
+    CLIPBOARD_COPY = "clipboard_copy"    # Ctrl+C detected
+    CLIPBOARD_PASTE = "clipboard_paste"  # Ctrl+V detected — may be cross-app
+    TOOL_SWITCH = "tool_switch"          # High-friction repeated transition between apps
+    IRRITANT = "irritant"                # Operator-flagged irritant
 
 
 class ProcedureState(StrEnum):
@@ -192,3 +196,28 @@ class FieldObservation(BaseModel):
 
     def is_validated(self) -> bool:
         return self.state == ProcedureState.VALIDATED and self.validated_at is not None
+
+
+class ToolTransition(BaseModel):
+    """Enriched metadata for a transition between two applications.
+
+    Attached as payload in TOOL_SWITCH BusinessEvents to capture tool-switching friction.
+    """
+    from_app: str
+    to_app: str
+    transition_count: int = Field(ge=1, description="Number of times this pair was seen in the session")
+    is_cross_app_paste: bool = Field(default=False, description="True when a clipboard paste triggered this transition")
+    schema_version: str = Field(default="1.0")
+
+
+class IrritantSignal(BaseModel):
+    """An operator-flagged irritant moment.
+
+    Captured when the operator explicitly signals friction (hotkey) or
+    when the system auto-detects high-friction patterns.
+    """
+    source: str = Field(description="'operator' for manual, 'auto' for system-detected")
+    irritant_type: str = Field(description="e.g. 'repeated_action', 'cross_app_paste', 'manual'")
+    app: str
+    related_event_ids: list[str] = Field(default_factory=list)
+    schema_version: str = Field(default="1.0")
