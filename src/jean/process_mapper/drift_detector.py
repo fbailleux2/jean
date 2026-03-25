@@ -39,11 +39,31 @@ class DriftDetector:
         process: ProcessDefinition,
         traces: list[SessionTrace],
     ) -> DriftReport:
-        """Compute a DriftReport for the given process and its matching traces."""
-        # Declared event types from steps
+        """Compute a DriftReport for the given process and its matching traces.
+
+        Returns drift_score=0.0 when no traces are available — there is no
+        observed baseline to compare against, so drift cannot be measured.
+        """
+        if not traces:
+            return DriftReport(
+                process_id=process.id,
+                process_name=process.name,
+                process_context=process.process_context,
+                declared_step_count=len(process.steps),
+                observed_event_types=[],
+                declared_event_types=sorted(
+                    {et.value for step in process.steps for et in step.related_event_types}
+                ),
+                drift_score=0.0,
+                session_count_analysed=0,
+                computed_at=datetime.now(timezone.utc),
+                alert=False,
+            )
+
+        # Declared event types from steps (use .value for uniform string comparison)
         declared: set[str] = set()
         for step in process.steps:
-            declared.update(step.related_event_types)
+            declared.update(et.value for et in step.related_event_types)
 
         # Observed event types from traces
         observed: set[str] = set()

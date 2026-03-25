@@ -81,7 +81,7 @@ class FlowFabricBridge:
             "observed_behavior": observation.observed_behavior,
             "gap_score": observation.gap_score,
             "supporting_patterns": observation.supporting_patterns,
-            "validated_by": observation.validated_by,
+            "validated_by": observation.validated_by or "",
             "validated_at": (
                 observation.validated_at.isoformat()
                 if observation.validated_at

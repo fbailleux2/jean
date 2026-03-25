@@ -148,7 +148,7 @@ class ClipboardCapture:
             paste_event = self._make_event(
                 EventType.CLIPBOARD_PASTE,
                 current_app,
-                {"from_app": self._last_copy_app, "is_cross_app": is_cross_app},
+                {"from_app": self._last_copy_app or "", "is_cross_app": is_cross_app},
             )
             self._emit(paste_event)
 

@@ -287,7 +287,7 @@ class ProcessStep(BaseModel):
         le=1.0,
         description="Friction score: 0=smooth, 1=highly frustrating",
     )
-    related_event_types: list[str] = Field(
+    related_event_types: list[EventType] = Field(
         default_factory=list,
         description="EventType values observed at this step",
     )

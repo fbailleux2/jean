@@ -128,12 +128,13 @@ def test_no_alert_below_threshold():
 
 
 def test_empty_traces():
-    """No traces → observed set is empty; drift based on declared types only."""
+    """No traces → no observed baseline; drift_score=0.0 (cannot be measured)."""
     process = _make_process(related_event_types=[[EventType.SAVE]])
     detector = DriftDetector()
     report = detector.compute(process, traces=[])
-    # declared={save}, observed={}, union={save}, intersection={} → score=1.0
-    assert report.drift_score == 1.0
+    # No data to compare against → score=0.0, alert=False
+    assert report.drift_score == 0.0
+    assert report.alert is False
     assert report.session_count_analysed == 0
     assert report.observed_event_types == []
 

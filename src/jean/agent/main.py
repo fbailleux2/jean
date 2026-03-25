@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 import uuid
 
 import structlog
@@ -50,8 +51,18 @@ async def _capture_loop(
     kb_queue: asyncio.Queue = asyncio.Queue()
     loop = asyncio.get_running_loop()
 
-    # Shared mutable container for current active app (updated by AppTransitionCapture drain)
-    current_app: list[str] = ["unknown"]
+    # Thread-safe container for current active app.
+    # Written by the asyncio drain coroutine, read by the pynput background thread.
+    _current_app_lock = threading.Lock()
+    _current_app_value: list[str] = ["unknown"]
+
+    def _get_current_app() -> str:
+        with _current_app_lock:
+            return _current_app_value[0]
+
+    def _set_current_app(app: str) -> None:
+        with _current_app_lock:
+            _current_app_value[0] = app
 
     app_cap = AppTransitionCapture(workstation_id, process_context, session_id)
     struct_cap = StructuralActionCapture(workstation_id, process_context, session_id)
@@ -67,14 +78,14 @@ async def _capture_loop(
         workstation_id=workstation_id,
         process_context=process_context,
         session_id=session_id,
-        current_app_fn=lambda: current_app[0],
+        current_app_fn=_get_current_app,
         loop=loop,
     )
 
     async def _drain_gen(cap: AppTransitionCapture | StructuralActionCapture) -> None:
         async for event in cap.events():
             if event.app != "unknown":
-                current_app[0] = event.app
+                _set_current_app(event.app)
             await buffer.push(event)
             log.debug("Captured event", type=event.type, app=event.app)
 
