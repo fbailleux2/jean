@@ -23,6 +23,7 @@ import structlog
 
 from jean.agent.buffer import LocalBuffer
 from jean.agent.capture import AnnotationCapture, AppTransitionCapture, StructuralActionCapture
+from jean.agent.capture_clipboard import ClipboardCapture
 from jean.agent.capture_keyboard import KeyboardCapture
 from jean.agent.emitter import EventEmitter
 
@@ -49,6 +50,9 @@ async def _capture_loop(
     kb_queue: asyncio.Queue = asyncio.Queue()
     loop = asyncio.get_running_loop()
 
+    # Shared mutable container for current active app (updated by AppTransitionCapture drain)
+    current_app: list[str] = ["unknown"]
+
     app_cap = AppTransitionCapture(workstation_id, process_context, session_id)
     struct_cap = StructuralActionCapture(workstation_id, process_context, session_id)
     kb_cap = KeyboardCapture(
@@ -58,9 +62,19 @@ async def _capture_loop(
         session_id=session_id,
         loop=loop,
     )
+    clipboard_cap = ClipboardCapture(
+        event_queue=asyncio.Queue(),
+        workstation_id=workstation_id,
+        process_context=process_context,
+        session_id=session_id,
+        current_app_fn=lambda: current_app[0],
+        loop=loop,
+    )
 
     async def _drain_gen(cap: AppTransitionCapture | StructuralActionCapture) -> None:
         async for event in cap.events():
+            if event.app != "unknown":
+                current_app[0] = event.app
             await buffer.push(event)
             log.debug("Captured event", type=event.type, app=event.app)
 
@@ -74,7 +88,17 @@ async def _capture_loop(
         finally:
             kb_cap.stop()
 
-    await asyncio.gather(_drain_gen(app_cap), _drain_gen(struct_cap), _drain_kb())
+    async def _drain_clipboard() -> None:
+        clipboard_cap.start()
+        try:
+            while True:
+                event = await clipboard_cap.event_queue.get()
+                await buffer.push(event)
+                log.debug("Clipboard event", type=event.type, app=event.app)
+        finally:
+            clipboard_cap.stop()
+
+    await asyncio.gather(_drain_gen(app_cap), _drain_gen(struct_cap), _drain_kb(), _drain_clipboard())
 
 
 async def _emit_loop(buffer: LocalBuffer) -> None:

@@ -72,6 +72,38 @@ class ERPIngestRequest(BaseModel):
     event: ERPEventSchema
 
 
+class ERPSearchEvent(BaseModel):
+    """Captures ERP search actions including failed lookups and retries.
+
+    Documents the common 'search → not found → retry with variant' pattern
+    that represents hidden friction in ERP workflows.
+    """
+    search_term_hash: str = Field(
+        description="SHA-256 hash of the search term — never the raw term"
+    )
+    entity_type: str = Field(description="What was searched: 'customer', 'product', 'order'")
+    result_count: int = Field(ge=0, description="Number of results returned (0 = miss)")
+    attempt_number: int = Field(ge=1, default=1, description="1 for first try, >1 for retries")
+
+    model_config = {"extra": "ignore"}
+
+    @field_validator("entity_type")
+    @classmethod
+    def valid_entity(cls, v: str) -> str:
+        allowed = {"customer", "product", "order", "supplier", "invoice"}
+        if v.lower() not in allowed:
+            raise ValueError(f"entity_type must be one of {allowed}")
+        return v.lower()
+
+
+class ERPSearchRequest(BaseModel):
+    """Wrapper for an ERP search event ingest."""
+    workstation_id: str = Field(default="erp-connector")
+    session_id: str
+    process_context: str = Field(default="invoice-exception")
+    search: ERPSearchEvent
+
+
 def _map_to_business_event(req: ERPIngestRequest) -> BusinessEvent:
     """Map an ERPIngestRequest to a BusinessEvent.
 
@@ -98,6 +130,25 @@ def _map_to_business_event(req: ERPIngestRequest) -> BusinessEvent:
 # ---------------------------------------------------------------------------
 
 
+def _map_search_to_business_event(req: ERPSearchRequest) -> BusinessEvent:
+    from jean.models import EventType
+    return BusinessEvent(
+        type=EventType.ERP_EVENT,
+        app="erp-connector",
+        timestamp=datetime.now(timezone.utc),
+        process_context=req.process_context,
+        session_id=req.session_id,
+        workstation_id=req.workstation_id,
+        payload={
+            "search_entity": req.search.entity_type,
+            "result_count": req.search.result_count,
+            "attempt_number": req.search.attempt_number,
+            "is_miss": req.search.result_count == 0,
+            "is_retry": req.search.attempt_number > 1,
+        },
+    )
+
+
 @router.post("/erp/events", status_code=201)
 async def ingest_erp_event(req: ERPIngestRequest) -> dict:
     """Receive a structured ERP event and forward it to the aggregator pipeline.
@@ -108,3 +159,19 @@ async def ingest_erp_event(req: ERPIngestRequest) -> dict:
     """
     event = _map_to_business_event(req)
     return {"event_id": event.id, "type": event.type, "payload": event.payload}
+
+
+@router.post("/erp/searches", status_code=201)
+async def ingest_erp_search(req: ERPSearchRequest) -> dict:
+    """Capture an ERP search event (lookup + result count).
+
+    Allows tracking of 'customer not found → retry with variant' patterns
+    that represent hidden friction steps in ERP workflows.
+    The raw search term is NEVER ingested — only its hash and result metadata.
+    """
+    event = _map_search_to_business_event(req)
+    return {
+        "event_id": event.id,
+        "type": event.type,
+        "payload": event.payload,
+    }

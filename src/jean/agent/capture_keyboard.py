@@ -44,6 +44,7 @@ _DEFAULT_HOTKEYS: dict[frozenset[str], EventType] = {
     frozenset({"ctrl", "s"}): EventType.SAVE,
     frozenset({"ctrl", "p"}): EventType.PRINT,
     frozenset({"ctrl", "shift", "e"}): EventType.EXPORT,
+    frozenset({"ctrl", "alt", "i"}): EventType.IRRITANT,
 }
 
 

@@ -20,6 +20,7 @@ from fastapi import Depends, FastAPI
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from jean.aggregator.anonymizer import Anonymizer
+from jean.aggregator.irritant_detector import IrritantDetector
 from jean.aggregator.observation_generator import ObservationDispatcher, ObservationGenerator
 from jean.aggregator.pattern_detector import PatternDetector
 from jean.aggregator.store import AbstractStore, InMemoryStore, make_store
@@ -31,6 +32,7 @@ log = structlog.get_logger()
 
 _anonymizer = Anonymizer()
 _detector = PatternDetector(window_size=3, min_frequency=2)
+_irritant_detector = IrritantDetector()
 _patterns: list[PatternHypothesis] = []
 _store: AbstractStore = InMemoryStore()
 _obs_generator = ObservationGenerator()
@@ -100,13 +102,22 @@ async def ingest(events: list[BusinessEvent], _: None = Depends(require_auth)) -
     for obs in observations:
         asyncio.create_task(_obs_dispatcher.dispatch(obs))
 
+    # Run irritant detection on the newly ingested traces
+    irritant_signals = _irritant_detector.detect(new_traces)
+
     log.info(
         "Ingested events",
         count=len(clean),
         patterns_detected=len(_patterns),
         observations_generated=len(observations),
+        irritants_detected=len(irritant_signals),
     )
-    return {"accepted": len(clean), "patterns_detected": len(_patterns), "observations_generated": len(observations)}
+    return {
+        "accepted": len(clean),
+        "patterns_detected": len(_patterns),
+        "observations_generated": len(observations),
+        "irritants_detected": len(irritant_signals),
+    }
 
 
 @app.get("/patterns", response_model=list[PatternHypothesis])

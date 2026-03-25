@@ -39,6 +39,10 @@ class EventType(StrEnum):
     ANNOTATION = "annotation"       # Explicit operator annotation
     ERP_EVENT = "erp_event"         # Inbound event from ERP / external system
     CUSTOM = "custom"               # Any other captured action
+    CLIPBOARD_COPY = "clipboard_copy"    # Ctrl+C detected
+    CLIPBOARD_PASTE = "clipboard_paste"  # Ctrl+V detected — may be cross-app
+    TOOL_SWITCH = "tool_switch"          # High-friction repeated transition between apps
+    IRRITANT = "irritant"                # Operator-flagged irritant
 
 
 class ProcedureState(StrEnum):
@@ -192,3 +196,134 @@ class FieldObservation(BaseModel):
 
     def is_validated(self) -> bool:
         return self.state == ProcedureState.VALIDATED and self.validated_at is not None
+
+
+class ToolTransition(BaseModel):
+    """Enriched metadata for a transition between two applications.
+
+    Attached as payload in TOOL_SWITCH BusinessEvents to capture tool-switching friction.
+    """
+    from_app: str
+    to_app: str
+    transition_count: int = Field(ge=1, description="Number of times this pair was seen in the session")
+    is_cross_app_paste: bool = Field(default=False, description="True when a clipboard paste triggered this transition")
+    schema_version: str = Field(default="1.0")
+
+
+class IrritantSignal(BaseModel):
+    """An operator-flagged irritant moment.
+
+    Captured when the operator explicitly signals friction (hotkey) or
+    when the system auto-detects high-friction patterns.
+    """
+    source: str = Field(description="'operator' for manual, 'auto' for system-detected")
+    irritant_type: str = Field(description="e.g. 'repeated_action', 'cross_app_paste', 'manual'")
+    app: str
+    related_event_ids: list[str] = Field(default_factory=list)
+    schema_version: str = Field(default="1.0")
+
+
+class DecisionAnnotation(BaseModel):
+    """An operator annotation that captures an implicit decision rule.
+
+    Triggered when the operator uses the 'explain decision' hotkey (Ctrl+Alt+D)
+    or via the FlowFabric Inbox. Stores the rule in structured form when possible.
+
+    Example: 'if customer is VIP → move to priority queue'
+    """
+    text: str = Field(description="Free-form decision description from the operator")
+    condition: str | None = Field(
+        default=None,
+        description="Extracted condition (e.g. 'customer_status=VIP'). None if not structured.",
+    )
+    action: str | None = Field(
+        default=None,
+        description="Extracted action (e.g. 'priority=high'). None if not structured.",
+    )
+    app: str = Field(description="Application active when annotation was made")
+    related_event_id: str | None = Field(
+        default=None,
+        description="BusinessEvent ID this decision explains",
+    )
+    schema_version: str = Field(default="1.0")
+
+
+# ---------------------------------------------------------------------------
+# Process modeling — Phase 3
+# ---------------------------------------------------------------------------
+
+
+class ProcessInput(BaseModel):
+    """Declares one input to a business process (e.g. email, file, ERP event)."""
+    name: str = Field(description="Input name, e.g. 'customer_email'")
+    source: str = Field(description="Origin: 'email', 'erp', 'file', 'call', 'manual'")
+    required: bool = Field(default=True)
+    schema_version: str = Field(default="1.0")
+
+
+class ProcessOutput(BaseModel):
+    """Declares one output of a business process (e.g. validated order, sent invoice)."""
+    name: str = Field(description="Output name, e.g. 'validated_order'")
+    destination: str = Field(description="Target system: 'erp', 'email', 'file', 'manual'")
+    schema_version: str = Field(default="1.0")
+
+
+class ProcessStep(BaseModel):
+    """One observed step in a documented business process.
+
+    Aligns with the table format from the process documentation methodology:
+    | Step | Action | Tool | Decision | Irritant |
+    """
+    sequence: int = Field(ge=1, description="Step order (1-indexed)")
+    action: str = Field(description="What the operator does, e.g. 'Search for customer in ERP'")
+    tool: str = Field(description="Application/tool used, e.g. 'SAP', 'Outlook'")
+    decision: str | None = Field(
+        default=None,
+        description="Implicit decision rule at this step, e.g. 'if client absent → create'",
+    )
+    irritant_score: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Friction score: 0=smooth, 1=highly frustrating",
+    )
+    related_event_types: list[str] = Field(
+        default_factory=list,
+        description="EventType values observed at this step",
+    )
+    schema_version: str = Field(default="1.0")
+
+
+class ProcessDefinition(BaseModel):
+    """A declared business process with its trigger, steps, and expected I/O.
+
+    Created by an admin or validator to frame what Jean should observe.
+    Jean then associates captured SessionTraces with matching ProcessDefinitions.
+    """
+    id: str = Field(default_factory=_uuid)
+    name: str = Field(description="Process name, e.g. 'invoice-exception-handling'")
+    process_context: str = Field(
+        description="Must match the process_context used in BusinessEvents"
+    )
+    description: str = Field(default="", description="Human-readable process description")
+    trigger: str = Field(
+        description="What starts this process, e.g. 'incoming customer email'"
+    )
+    inputs: list[ProcessInput] = Field(default_factory=list)
+    outputs: list[ProcessOutput] = Field(default_factory=list)
+    steps: list[ProcessStep] = Field(default_factory=list)
+    state: ProcedureState = Field(default=ProcedureState.DECLARED)
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
+    version: str = Field(default="1.0.0", description="Semantic version of this process definition")
+    schema_version: str = Field(default="1.0")
+
+    @field_validator("steps")
+    @classmethod
+    def steps_ordered(cls, v: list[ProcessStep]) -> list[ProcessStep]:
+        """Ensure steps are in ascending sequence order."""
+        if v:
+            seqs = [s.sequence for s in v]
+            if seqs != sorted(seqs):
+                raise ValueError("steps must be in ascending sequence order")
+        return v
