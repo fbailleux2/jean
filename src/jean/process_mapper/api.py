@@ -18,7 +18,7 @@ import structlog
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from jean.models import ProcessDefinition, ProcedureState
+from jean.models import ProcessDefinition, ProcedureState, ProcessVersionEntry
 from jean.process_mapper.store import ProcessStore
 
 log = structlog.get_logger()
@@ -107,3 +107,30 @@ async def delete_process(process_id: str) -> None:
     """Delete a process definition."""
     if not get_store().delete(process_id):
         raise HTTPException(status_code=404, detail="Process not found")
+
+
+@router.get("/processes/{process_id}/history", response_model=list)
+async def get_process_history(process_id: str) -> list:
+    """Return the version history of a process definition."""
+    store = get_store()
+    if not store.get(process_id):
+        raise HTTPException(status_code=404, detail="Process not found")
+    return [entry.model_dump() for entry in store.get_version_history(process_id)]
+
+
+@router.get("/processes/{process_id}/drift", response_model=dict)
+async def get_process_drift(process_id: str) -> dict:
+    """Compute a drift report comparing the declared process to recent observations.
+
+    Requires jean-aggregator traces to be accessible. Returns DriftReport as dict.
+    Note: In this version, traces are passed via request body in the full integration.
+    This endpoint returns a zero-drift report when no traces are available.
+    """
+    from jean.process_mapper.drift_detector import DriftDetector
+    store = get_store()
+    process = store.get(process_id)
+    if not process:
+        raise HTTPException(status_code=404, detail="Process not found")
+    detector = DriftDetector()
+    report = detector.compute(process, traces=[])
+    return report.model_dump()
