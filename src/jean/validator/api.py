@@ -163,6 +163,11 @@ async def approve_observation(
 
     if obs.state == ProcedureState.VALIDATED:
         raise HTTPException(status_code=409, detail="Observation is already VALIDATED")
+    if obs.state != ProcedureState.OBSERVED:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Only OBSERVED observations can be approved (current state: {obs.state})",
+        )
 
     validated = obs.model_copy(
         update={
@@ -251,6 +256,11 @@ async def flowfabric_webhook(req: FlowFabricWebhookRequest) -> FieldObservation:
     if req.action == _WebhookAction.APPROVE:
         if obs.state == ProcedureState.VALIDATED:
             raise HTTPException(status_code=409, detail="Observation is already VALIDATED")
+        if obs.state != ProcedureState.OBSERVED:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Only OBSERVED observations can be approved (current state: {obs.state})",
+            )
 
         validated = obs.model_copy(
             update={

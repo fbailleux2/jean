@@ -100,7 +100,12 @@ async def ingest(events: list[BusinessEvent], _: None = Depends(require_auth)) -
     # Auto-generate FieldObservations and dispatch in the background (fire-and-forget)
     observations = _obs_generator.generate(_patterns)
     for obs in observations:
-        asyncio.create_task(_obs_dispatcher.dispatch(obs))
+        task = asyncio.create_task(_obs_dispatcher.dispatch(obs))
+        task.add_done_callback(
+            lambda t: log.warning("Observation dispatch failed", error=str(t.exception()))
+            if not t.cancelled() and t.exception() is not None
+            else None
+        )
 
     # Run irritant detection on the newly ingested traces
     irritant_signals = _irritant_detector.detect(new_traces)
