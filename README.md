@@ -111,6 +111,23 @@ See `.env.example` for a full list. Key variables:
 
 ---
 
+## Process Documentation Feature / Fonctionnalité de documentation des processus
+
+Jean can now document real business processes in 5 phases — from enriched capture to continuous improvement.
+Jean peut désormais documenter les vrais processus métier en 5 phases — de la capture enrichie à l'amélioration continue.
+
+📖 **[Full bilingual documentation / Documentation bilingue complète](docs/process-documentation-feature.md)**
+
+| Phase | EN | FR |
+|-------|----|----|
+| 1 — Enriched Capture | Clipboard, tool-switch friction, ERP search miss | Presse-papiers, friction inter-outils, recherche ERP ratée |
+| 2 — Irritants & Decisions | Auto-detection, Ctrl+Alt+I hotkey, DecisionAnnotation | Détection auto, touche Ctrl+Alt+I, annotation de décision |
+| 3 — Process Modeling | ProcessDefinition, ProcessStep, I/O, REST CRUD | ProcessDefinition, ProcessStep, E/S, API REST |
+| 4 — Doc & Rules | Markdown/JSON export, if/then rule extraction | Export Markdown/JSON, extraction de règles si/alors |
+| 5 — Continuous Improvement | Drift detection, gain metrics, version history | Détection de dérive, métriques de gains, historique |
+
+---
+
 ## Project Status
 
 **v0.9.0 — Full capture stack + KFabric auth.**
