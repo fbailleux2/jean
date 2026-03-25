@@ -221,3 +221,28 @@ class IrritantSignal(BaseModel):
     app: str
     related_event_ids: list[str] = Field(default_factory=list)
     schema_version: str = Field(default="1.0")
+
+
+class DecisionAnnotation(BaseModel):
+    """An operator annotation that captures an implicit decision rule.
+
+    Triggered when the operator uses the 'explain decision' hotkey (Ctrl+Alt+D)
+    or via the FlowFabric Inbox. Stores the rule in structured form when possible.
+
+    Example: 'if customer is VIP → move to priority queue'
+    """
+    text: str = Field(description="Free-form decision description from the operator")
+    condition: str | None = Field(
+        default=None,
+        description="Extracted condition (e.g. 'customer_status=VIP'). None if not structured.",
+    )
+    action: str | None = Field(
+        default=None,
+        description="Extracted action (e.g. 'priority=high'). None if not structured.",
+    )
+    app: str = Field(description="Application active when annotation was made")
+    related_event_id: str | None = Field(
+        default=None,
+        description="BusinessEvent ID this decision explains",
+    )
+    schema_version: str = Field(default="1.0")

@@ -213,3 +213,41 @@ class AnnotationCapture(BaseCapture):
         await self.event_queue.put(
             self._make_event(EventType.ANNOTATION, app, {"text": text})
         )
+
+
+class IrritantCapture(BaseCapture):
+    """Captures operator-flagged irritants via a dedicated hotkey (Ctrl+Alt+I).
+
+    When the operator finds a step frustrating, they press the hotkey to signal it.
+    The signal is stored as an IRRITANT BusinessEvent with the active app name.
+
+    Privacy guarantee: no content is captured, only the app and timestamp.
+    """
+
+    def __init__(
+        self,
+        workstation_id: str,
+        process_context: str,
+        session_id: str,
+        *,
+        event_queue: asyncio.Queue[BusinessEvent] | None = None,
+    ) -> None:
+        super().__init__(workstation_id, process_context, session_id)
+        self.event_queue: asyncio.Queue[BusinessEvent] = event_queue or asyncio.Queue()
+
+    async def events(self) -> AsyncGenerator[BusinessEvent, None]:  # type: ignore[override]
+        while True:
+            event = await self.event_queue.get()
+            yield event
+
+    async def flag_irritant(self, app: str, irritant_type: str = "manual") -> None:
+        """Record an operator-flagged irritant. Called by IrritantKeyboardCapture."""
+        from jean.models import IrritantSignal
+        signal = IrritantSignal(
+            source="operator",
+            irritant_type=irritant_type,
+            app=app,
+        )
+        await self.event_queue.put(
+            self._make_event(EventType.IRRITANT, app, signal.model_dump())
+        )
