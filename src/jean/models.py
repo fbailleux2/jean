@@ -327,3 +327,55 @@ class ProcessDefinition(BaseModel):
             if seqs != sorted(seqs):
                 raise ValueError("steps must be in ascending sequence order")
         return v
+
+
+class ProcessVersionEntry(BaseModel):
+    """One entry in the version history of a ProcessDefinition."""
+    version: str
+    changed_at: datetime = Field(default_factory=_now)
+    changed_by: str | None = None
+    change_summary: str = Field(default="")
+    snapshot_steps_count: int = Field(ge=0)
+    schema_version: str = Field(default="1.0")
+
+
+class DriftReport(BaseModel):
+    """Measures the divergence between declared process steps and observed reality.
+
+    A drift_score of 0.0 means the process is observed exactly as declared.
+    A drift_score of 1.0 means observed behavior shares nothing with the declaration.
+    """
+    process_id: str
+    process_name: str
+    process_context: str
+    declared_step_count: int
+    observed_event_types: list[str] = Field(
+        description="Unique event types seen in recent sessions"
+    )
+    declared_event_types: list[str] = Field(
+        description="Event types referenced in declared steps"
+    )
+    drift_score: float = Field(ge=0.0, le=1.0)
+    session_count_analysed: int = Field(ge=0)
+    computed_at: datetime = Field(default_factory=_now)
+    alert: bool = Field(default=False, description="True when drift_score exceeds threshold")
+    schema_version: str = Field(default="1.0")
+
+
+class ProcessGainMetrics(BaseModel):
+    """Before/after metrics for a process after an improvement cycle."""
+    process_id: str
+    process_context: str
+    period_start: datetime
+    period_end: datetime
+    avg_irritant_count_before: float = Field(ge=0.0)
+    avg_irritant_count_after: float = Field(ge=0.0)
+    avg_tool_switches_before: float = Field(ge=0.0)
+    avg_tool_switches_after: float = Field(ge=0.0)
+    irritant_reduction_pct: float = Field(
+        description="Percentage reduction in irritants. Positive = improvement."
+    )
+    tool_switch_reduction_pct: float = Field(
+        description="Percentage reduction in tool switches. Positive = improvement."
+    )
+    schema_version: str = Field(default="1.0")
