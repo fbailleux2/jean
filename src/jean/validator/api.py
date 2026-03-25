@@ -40,6 +40,7 @@ from jean.bridges.flowfabric import FlowFabricBridge
 from jean.corpus_feeder.adapter import make_adapter
 from jean.corpus_feeder.pipeline import CorpusPipeline
 from jean.models import FieldObservation, ProcedureState
+from jean.process_mapper.api import router as process_router
 from jean.validator.store import InMemoryObservationStore, ObservationStore, make_obs_store
 
 log = structlog.get_logger()
@@ -76,6 +77,7 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(title="jean-validator", version="0.3.0", lifespan=_lifespan)
 Instrumentator().instrument(app).expose(app)
+app.include_router(process_router, prefix="/process-mapper")
 
 
 # ---------------------------------------------------------------------------
